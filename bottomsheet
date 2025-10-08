@@ -1,0 +1,211 @@
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:pdf_merge/widget/bottomSheet/PrimaryActionButton.dart';
+import 'package:pdf_merge/widget/bottomSheet/TabSwitcher.dart';
+import 'package:pdf_merge/widget/bottomSheet/gallery_imageTile.dart';
+import 'package:photo_manager/photo_manager.dart';
+
+/// Function that shows the gallery bottom sheet and returns selected image files
+Future<List<File>> showGalleryBottomSheet(BuildContext context) async {
+  return await showModalBottomSheet<List<File>>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (_) => const GalleryBottomSheetContent(), // Use the stateful widget
+  ).then((value) => value ?? []); // Handle case where sheet is dismissed
+}
+
+// Main stateful widget for the bottom sheet content
+class GalleryBottomSheetContent extends StatefulWidget {
+  const GalleryBottomSheetContent({Key? key}) : super(key: key);
+
+  @override
+  _GalleryBottomSheetContentState createState() =>
+      _GalleryBottomSheetContentState();
+}
+
+class _GalleryBottomSheetContentState extends State<GalleryBottomSheetContent> {
+  final List<AssetEntity> _images = [];
+  final List<int> _selectedIndexes = [];
+  bool _loading = true;
+  int _selectedTabIndex =0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadImages();
+  }
+// Inside your GalleryBottomSheet's State class
+
+Future<void> _loadImages() async {
+  // 1. Request permission using photo_manager's own method
+  final ps = await PhotoManager.requestPermissionExtend();
+
+  // 2. Check if permission is authorized (this covers both full and limited access)
+  if (ps.isAuth) {
+    // --- PERMISSION GRANTED ---
+    // Permission is granted, so we proceed to load the images.
+    final albums = await PhotoManager.getAssetPathList(
+      onlyAll: true,
+      type: RequestType.image,
+    );
+    if (albums.isNotEmpty) {
+      final recent = albums.first;
+      final photos = await recent.getAssetListPaged(page: 0, size: 200);
+      if (mounted) {
+        setState(() {
+          _images.addAll(photos);
+          _loading = false;
+        });
+      }
+    } else {
+      if (mounted) setState(() => _loading = false);
+    }
+  } else {
+    // --- PERMISSION DENIED ---
+    // Permission is not granted. We show a helpful dialog.
+    if (mounted) {
+      setState(() => _loading = false);
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text("Permission Required"),
+          content: const Text(
+              "This app needs photo access to let you select images. Please grant permission in settings."),
+          actions: [
+            TextButton(
+              child: const Text("Cancel"),
+              onPressed: () {
+                Navigator.of(context).pop();
+                // Also close the bottom sheet if they cancel
+                Navigator.of(context).pop(); 
+              },
+            ),
+            TextButton(
+              child: const Text("Open Settings"),
+              onPressed: () {
+                // Use photo_manager's method to open settings
+                PhotoManager.openSetting();
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        ),
+      );
+    }
+  }
+}
+
+Future<void> _browseAndSelectFiles() async {
+  // Use the file_picker to open the file explorer
+  final result = await FilePicker.platform.pickFiles(
+    allowMultiple: true, // Allow user to select more than one image
+    type: FileType.image,    // Only show image files
+  );
+
+  // If the user picked files (and didn't cancel)
+  if (result != null && result.files.isNotEmpty) {
+    // Convert the picked files into a list of File objects
+    final selectedFiles = result.paths.map((path) => File(path!)).toList();
+
+    // Close the bottom sheet and send the selected files back
+    if (mounted) {
+      Navigator.pop(context, selectedFiles);
+    }
+  }
+}
+
+
+  @override
+  Widget build(BuildContext context) {
+    final height = MediaQuery.of(context).size.height * 0.75;
+
+    return Container(
+      height: height,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: Column(
+        children: [
+          // Header Tabs
+           
+TabSwitcher(
+  selectedIndex: _selectedTabIndex,
+  onTabSelected: (index) {
+      if(index==1){
+        _browseAndSelectFiles();
+      }
+      else{
+    setState(() {
+      _selectedTabIndex = index;
+      // You can add logic here to handle tab changes,
+      // like loading different albums.
+    
+    });
+  }
+  },
+),
+
+          // Image Grid
+          Expanded(
+             child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _images.isEmpty
+                    ? const Center(child: Text("No images found"))
+                    : GridView.builder(
+                        padding: const EdgeInsets.all(8),
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          crossAxisSpacing: 4,
+                          mainAxisSpacing: 4,
+                          childAspectRatio: 1.0,
+                        ),
+                        itemCount: _images.length,
+                        itemBuilder: (context, index) {
+                          final asset = _images[index];
+                          final isSelected = _selectedIndexes.contains(index);
+                          return GalleryImageTile(
+                            asset: asset,
+                            isSelected: isSelected,
+                            selectionNumber: isSelected
+                                ? _selectedIndexes.indexOf(index) + 1
+                                : 0,
+                            onTap: () {
+                              setState(() {
+                                if (isSelected) {
+                                  _selectedIndexes.remove(index);
+                                } else {
+                                  _selectedIndexes.add(index);
+                                }
+                              });
+                            },
+                          );
+                        },
+                      ),
+          ),
+
+           // Select Button Footer
+
+           PrimaryActionButton(
+            label: 'Select',
+            enabled: _selectedIndexes.isNotEmpty,
+            onPressed: () async{
+              final files = await Future.wait(
+                _selectedIndexes.map((i)=> _images[i].file),
+              );
+              Navigator.pop(
+                context,
+                files.whereType<File>().toList(),
+                );
+            },
+           ),
+          
+        ],
+      ),
+    );
+    
+  }
+}
